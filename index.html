@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>말 읽어주기</title>
+<style>
+:root{--bg:#fffdf7;--fg:#111;--muted:#8a8578;--line:#e5e1d8;--card:#fff;--accent:#1f6feb;--rec:#d1242f;--warn:#b35900}
+@media (prefers-color-scheme:dark){:root{--bg:#121212;--fg:#f5f5f5;--muted:#9a9a9a;--line:#333;--card:#1d1d1d;--warn:#ffab5c}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+  font-family:-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif}
+body{display:flex;flex-direction:column;padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+#status{font-size:18px;color:var(--muted);min-height:26px;margin-bottom:8px;white-space:pre-line}
+#status.warn{color:var(--warn);font-weight:600}
+#list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.item{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;
+  font-size:34px;font-weight:600;line-height:1.35;word-break:keep-all;overflow-wrap:anywhere;cursor:pointer}
+.item::before{content:"🔊 ";font-size:.7em}
+.item:active{transform:scale(.98)}
+.empty{color:var(--muted);font-size:22px;line-height:1.5}
+#mic{margin-top:12px;width:100%;padding:24px;font-size:28px;font-weight:700;border:none;border-radius:20px;
+  background:var(--accent);color:#fff;cursor:pointer}
+#mic.on{background:var(--rec)}
+</style>
+</head>
+<body>
+
+<div id="status"></div>
+<div id="list"><div class="empty" id="empty">① 아래 <b>말하기</b>를 누르고 말하세요 → 글로 바뀝니다.<br>② 글을 누르면 소리로 읽어줍니다.</div></div>
+<button id="mic">🎤 말하기</button>
+
+<script>
+(function(){
+  const $=id=>document.getElementById(id);
+  const list=$('list'), mic=$('mic'), st=$('status');
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const say=(t,warn)=>{ st.textContent=t||''; st.classList.toggle('warn',!!warn); };
+
+  // 열린 환경 점검 — 음성 인식이 안 되는 대표 원인을 화면에 바로 알려줌
+  const ua=navigator.userAgent;
+  if(/KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\//i.test(ua)){
+    say('카카오톡·네이버 등 앱 안에서 열려 있어 마이크가 안 됩니다.\n오른쪽 위 메뉴 → "다른 브라우저로 열기"로 Chrome(아이폰은 Safari)에서 여세요.',true);
+  } else if(/SamsungBrowser/i.test(ua)){
+    say('삼성 인터넷은 음성 인식이 잘 안 됩니다. Chrome으로 열어 주세요.',true);
+  } else if(location.protocol!=='https:' && location.hostname!=='localhost'){
+    say('파일을 직접 열면 마이크가 막힙니다. https 주소(Netlify·Vercel 등)로 열어 주세요.',true);
+  } else if(!SR){
+    say('이 브라우저는 음성 인식을 지원하지 않아요. Chrome(아이폰은 Safari)으로 열어 주세요.',true);
+  }
+
+  // 말 → 글 (누를 때마다 한 번씩 듣기)
+  let rec=null, busy=false, gotText=false;
+  mic.onclick=()=>{
+    unlockSpeech();
+    if(!SR){ return; }
+    if(busy){ try{rec.stop();}catch(e){} return; }
+    rec=new SR();
+    rec.lang='ko-KR'; rec.continuous=false; rec.interimResults=true; rec.maxAlternatives=1;
+    gotText=false;
+    rec.onstart=()=>{ busy=true; mic.classList.add('on'); mic.textContent='⏹ 듣는 중… (누르면 멈춤)'; say('말씀하세요.'); };
+    rec.onresult=e=>{
+      let t=''; let fin=false;
+      for(let i=0;i<e.results.length;i++){ t+=e.results[i][0].transcript; if(e.results[i].isFinal) fin=true; }
+      say('… '+t);
+      if(fin && t.trim()){ add(t.trim()); gotText=true; }
+    };
+    rec.onerror=e=>{
+      const m={
+        'not-allowed':'마이크 권한이 막혀 있어요. 주소창 왼쪽 자물쇠(설정) → 마이크 → 허용으로 바꿔 주세요.',
+        'service-not-allowed':'이 브라우저에서 음성 인식이 막혀 있어요. Chrome(아이폰은 Safari)으로 열어 주세요.',
+        'no-speech':'소리를 못 들었어요. 휴대폰 가까이에서 다시 말해 주세요.',
+        'audio-capture':'마이크를 찾을 수 없어요. 다른 앱이 마이크를 쓰고 있는지 확인해 주세요.',
+        'network':'음성 인식은 인터넷 연결이 필요해요.',
+        'aborted':''
+      };
+      say(m[e.error]!==undefined?m[e.error]:('오류: '+e.error), e.error!=='aborted');
+    };
+    rec.onend=()=>{
+      busy=false; mic.classList.remove('on'); mic.textContent='🎤 말하기';
+      if(gotText) say('글을 누르면 소리로 읽어줍니다.');
+    };
+    try{ rec.start(); }catch(err){ say('시작 오류: '+err.message,true); }
+  };
+
+  function add(text){
+    const e=$('empty'); if(e) e.remove();
+    const d=document.createElement('div');
+    d.className='item'; d.textContent=text;
+    d.onclick=()=>speak(text);
+    list.appendChild(d);
+    list.scrollTop=list.scrollHeight;
+  }
+
+  // 글 → 소리
+  let ko=null;
+  const pick=()=>{ const v=speechSynthesis.getVoices(); ko=v.find(x=>/^ko/i.test(x.lang))||null; };
+  if('speechSynthesis' in window){ pick(); speechSynthesis.onvoiceschanged=pick; }
+  function speak(t){
+    if(!('speechSynthesis' in window)){ say('이 브라우저는 소리 읽기를 지원하지 않아요.',true); return; }
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(t);
+    u.lang='ko-KR'; if(ko) u.voice=ko; u.rate=0.9; u.volume=1;
+    speechSynthesis.speak(u);
+  }
+  // 아이폰은 첫 터치 때 소리 출력을 깨워 둬야 함
+  let unlocked=false;
+  function unlockSpeech(){
+    if(unlocked||!('speechSynthesis' in window)) return;
+    const p=new SpeechSynthesisUtterance(' '); p.volume=0; speechSynthesis.speak(p); unlocked=true;
+  }
+})();
+</script>
+</body>
+</html>
